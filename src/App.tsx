@@ -135,11 +135,28 @@ export default function App() {
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
 
+    const handleOpenAdminSecret = () => {
+      setCurrentRoute("admin");
+      window.history.pushState({}, "", "/admin");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.shiftKey && e.altKey && e.key.toLowerCase() === "a") || (e.ctrlKey && e.altKey && e.key.toLowerCase() === "a")) {
+        e.preventDefault();
+        handleOpenAdminSecret();
+      }
+    };
+
     window.addEventListener("open-apply-modal", handleOpenModal);
     window.addEventListener("open-single-track-distribute", handleOpenSingleTrack);
+    window.addEventListener("open-admin-portal-secret", handleOpenAdminSecret);
+    window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("open-apply-modal", handleOpenModal);
       window.removeEventListener("open-single-track-distribute", handleOpenSingleTrack);
+      window.removeEventListener("open-admin-portal-secret", handleOpenAdminSecret);
+      window.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
 

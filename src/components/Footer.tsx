@@ -3,12 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Music, Github, Twitter, Youtube, Instagram, ArrowUp, Mail, Phone } from "lucide-react";
+import React, { useState } from "react";
+import { Music, Github, Twitter, Youtube, Instagram, ArrowUp, Mail, Phone, Lock } from "lucide-react";
 import Logo from "./Logo";
 
 export default function Footer() {
+  const [clickCount, setClickCount] = useState(0);
+
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleSecretAdminTrigger = () => {
+    setClickCount(prev => {
+      const next = prev + 1;
+      if (next >= 5) {
+        window.dispatchEvent(new CustomEvent("open-admin-portal-secret"));
+        return 0;
+      }
+      return next;
+    });
   };
 
   const footerLinks = [
@@ -31,8 +45,7 @@ export default function Footer() {
       links: [
         { label: "Distribution Plans", href: "#pricing" },
         { label: "Security & DRM", href: "#" },
-        { label: "FAQ Support Desk", href: "#" },
-        { label: "Curator Admin Portal", href: "/admin" }
+        { label: "FAQ Support Desk", href: "#" }
       ]
     }
   ];
@@ -157,8 +170,29 @@ export default function Footer() {
           </div>
 
           {/* Copyright description */}
-          <p className="text-[11px] text-gray-500 font-normal text-center sm:text-right font-mono">
-            &copy; {new Date().getFullYear()} WAVORA LIVE. All rights reserved. 100% Artist Ownership Guarantee.
+          <p className="text-[11px] text-gray-500 font-normal text-center sm:text-right font-mono flex items-center flex-wrap gap-1 items-center justify-center sm:justify-end">
+            <span>&copy; {new Date().getFullYear()}</span>
+            <span 
+              onClick={handleSecretAdminTrigger} 
+              className="hover:text-purple-400 cursor-pointer transition-colors select-none font-bold active:scale-95 px-1 rounded"
+              title="System Brand ID"
+            >
+              WAVORA LIVE
+            </span>
+            <span>. All rights reserved. 100% Artist Ownership Guarantee.</span>
+            <button
+              type="button"
+              onClick={handleSecretAdminTrigger}
+              className="opacity-10 hover:opacity-100 transition-opacity ml-1.5 p-0.5 text-gray-400 hover:text-purple-400 cursor-pointer"
+              title="Systems Access"
+            >
+              <Lock className="h-2.5 w-2.5 inline" />
+            </button>
+            {clickCount > 0 && (
+              <span className="text-[9px] text-purple-400/80 bg-purple-500/10 px-1 rounded animate-pulse font-mono ml-1">
+                ({clickCount}/5)
+              </span>
+            )}
           </p>
 
           {/* Scroller button */}
