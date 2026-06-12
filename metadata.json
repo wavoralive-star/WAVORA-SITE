@@ -1,0 +1,6 @@
+{
+  "name": "Wavora Live",
+  "description": "An all-in-one artist services platform featuring premium music distribution, empathetic artist wellness care, and AI mastering tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
