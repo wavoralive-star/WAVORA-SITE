@@ -14,6 +14,7 @@ import AdminPanel from "./components/AdminPanel";
 import SmartLinkCreator from "./components/SmartLinkCreator";
 import SmartLinkViewer from "./components/SmartLinkViewer";
 import SingleTrackDistributor from "./components/SingleTrackDistributor";
+import { syncOffersFromSupabase } from "./lib/pricing";
 
 export default function App() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -44,6 +45,11 @@ export default function App() {
     }
     return "home";
   });
+
+  // Sync promotional pricing offers from Supabase database globally on launch
+  useEffect(() => {
+    syncOffersFromSupabase();
+  }, []);
 
   // Load the initial smart link ID if applicable
   useEffect(() => {

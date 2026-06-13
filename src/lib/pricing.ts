@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { supabase } from "./supabase";
+
 export interface PlanPrices {
   annual: number;
   monthly: number;
@@ -45,11 +47,66 @@ export function getStoredOffers(): Record<string, PlanOffer> {
   }
 }
 
+// Fetch current offers from Supabase database to sync globally
+export async function syncOffersFromSupabase() {
+  try {
+    const { data, error } = await supabase.from("plan_offers").select("*");
+    if (error) {
+      console.warn("Could not retrieve plan offers from Supabase. Falling back to local values:", error);
+      return;
+    }
+    if (data && data.length > 0) {
+      const parsedOffers: Record<string, PlanOffer> = {
+        basic: { planId: "basic", annualOfferPrice: null, monthlyOfferPrice: null, offerLabel: "" },
+        pro: { planId: "pro", annualOfferPrice: null, monthlyOfferPrice: null, offerLabel: "" },
+        elite: { planId: "elite", annualOfferPrice: null, monthlyOfferPrice: null, offerLabel: "" }
+      };
+
+      data.forEach((row: any) => {
+        if (parsedOffers[row.plan_id]) {
+          parsedOffers[row.plan_id] = {
+            planId: row.plan_id,
+            annualOfferPrice: row.annual_offer_price !== null && row.annual_offer_price !== undefined ? Number(row.annual_offer_price) : null,
+            monthlyOfferPrice: row.monthly_offer_price !== null && row.monthly_offer_price !== undefined ? Number(row.monthly_offer_price) : null,
+            offerLabel: row.offer_label || ""
+          };
+        }
+      });
+
+      localStorage.setItem("wavora_plan_offers", JSON.stringify(parsedOffers));
+      // Dispatch globally to sync UI state instantly in a modular SPA setup
+      window.dispatchEvent(new Event("wavora_offers_updated"));
+    }
+  } catch (err) {
+    console.warn("Error synchronizing offers from Supabase:", err);
+  }
+}
+
 // Save pricing offer configurations
-export function saveStoredOffers(offers: Record<string, PlanOffer>) {
+export async function saveStoredOffers(offers: Record<string, PlanOffer>) {
   localStorage.setItem("wavora_plan_offers", JSON.stringify(offers));
   // Dispatch globally to sync UI state instantly in a modular SPA setup
   window.dispatchEvent(new Event("wavora_offers_updated"));
+
+  try {
+    const plansToSync = ["basic", "pro", "elite"] as const;
+    for (const planId of plansToSync) {
+      const offer = offers[planId];
+      if (offer) {
+        await supabase
+          .from("plan_offers")
+          .upsert({
+            plan_id: planId,
+            annual_offer_price: offer.annualOfferPrice,
+            monthly_offer_price: offer.monthlyOfferPrice,
+            offer_label: offer.offerLabel,
+            updated_at: new Date().toISOString()
+          });
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to synchronize pricing offers with Supabase:", err);
+  }
 }
 
 // Compute active discounted outcomes for display and transactions

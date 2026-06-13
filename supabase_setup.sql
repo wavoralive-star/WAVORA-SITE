@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS pricing_plans CASCADE;
 DROP TABLE IF EXISTS single_track_releases CASCADE;
 DROP TABLE IF EXISTS applications CASCADE;
 DROP TABLE IF EXISTS smart_links CASCADE;
+DROP TABLE IF EXISTS plan_offers CASCADE;
 
 -- Drop functions
 DROP FUNCTION IF EXISTS log_price_change();
@@ -91,6 +92,18 @@ CREATE TABLE smart_links (
 
 CREATE INDEX idx_smart_links_visits ON smart_links(visits DESC);
 CREATE INDEX idx_smart_links_user ON smart_links(user_id);
+
+
+-- ---------------------------------------------------------------------
+-- 4.5 "plan_offers" TABLE (Dynamic promotional offers synced globally)
+-- ---------------------------------------------------------------------
+CREATE TABLE plan_offers (
+    plan_id VARCHAR(50) PRIMARY KEY, -- 'basic', 'pro', 'elite'
+    annual_offer_price NUMERIC(10, 2), -- e.g. 299 or null
+    monthly_offer_price NUMERIC(10, 2), -- e.g. 39 or null
+    offer_label VARCHAR(255), -- e.g. "Early Bird Offer"
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
 
 
 -- ---------------------------------------------------------------------
@@ -172,6 +185,13 @@ SET name = EXCLUDED.name,
     type = EXCLUDED.type, 
     price = EXCLUDED.price;
 
+-- Seed default plan offers
+INSERT INTO plan_offers (plan_id, annual_offer_price, monthly_offer_price, offer_label) VALUES
+('basic', null, null, ''),
+('pro', null, null, ''),
+('elite', null, null, '')
+ON CONFLICT (plan_id) DO NOTHING;
+
 
 -- ---------------------------------------------------------------------
 -- 9. DEEP SECURITY FRAMEWORK: ROW LEVEL SECURITY (RLS) POLICIES
@@ -183,6 +203,7 @@ ALTER TABLE single_track_releases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE smart_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pricing_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE price_change_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE plan_offers ENABLE ROW LEVEL SECURITY;
 
 -- applications policies:
 -- Only allow anonymous/customer insert from the main application signup screens
@@ -240,3 +261,15 @@ USING (true);
 CREATE POLICY "Authorized individuals can read price logs" 
 ON price_change_logs FOR SELECT 
 USING (auth.role() = 'authenticated');
+
+-- plan_offers policies:
+-- Public can view catalog pricing offers
+CREATE POLICY "Public plan offers viewable by everyone" 
+ON plan_offers FOR SELECT 
+USING (true);
+
+-- Allow administrative / anonymous plan offer updates and inserts
+CREATE POLICY "Allow public flow updates on plan offers" 
+ON plan_offers FOR ALL 
+USING (true)
+WITH CHECK (true);
