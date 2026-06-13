@@ -41,15 +41,12 @@ export default function App() {
   const [selectedSingleTrackPlan, setSelectedSingleTrackPlan] = useState<"basic" | "pro" | "elite">("pro");
 
   // Client-side Router State (Instant synchronous resolution on initial mount)
-  const [currentRoute, setCurrentRoute] = useState<"home" | "admin" | "smart-links" | "view-smart-link" | "single-track-distribute">(() => {
+  const [currentRoute, setCurrentRoute] = useState<"home" | "admin" | "view-smart-link" | "single-track-distribute">(() => {
     const path = window.location.pathname;
     const hash = window.location.hash;
     
     if (path === "/admin" || path.startsWith("/admin") || hash === "#admin" || hash === "#/admin") {
       return "admin";
-    }
-    if (path === "/smart-links" || path.startsWith("/smart-links") || hash === "#smart-links" || hash === "#/smart-links") {
-      return "smart-links";
     }
     if (path === "/distribute-single" || hash === "#distribute-single") {
       return "single-track-distribute";
@@ -76,8 +73,6 @@ export default function App() {
       const hash = window.location.hash;
       if (path === "/admin" || path.startsWith("/admin") || hash === "#admin" || hash === "#/admin") {
         setCurrentRoute("admin");
-      } else if (path === "/smart-links" || path.startsWith("/smart-links") || hash === "#smart-links" || hash === "#/smart-links") {
-        setCurrentRoute("smart-links");
       } else if (path.startsWith("/s/") || hash.startsWith("#/s/") || hash.startsWith("#s/")) {
         const id = getCleanedSmartLinkId(path, hash);
         setActiveSmartLinkId(id);
@@ -105,11 +100,6 @@ export default function App() {
           e.preventDefault();
           setCurrentRoute("admin");
           window.history.pushState({}, "", "/admin");
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        } else if (href === "/smart-links" || href === "#smart-links" || href === "#/smart-links") {
-          e.preventDefault();
-          setCurrentRoute("smart-links");
-          window.history.pushState({}, "", "/smart-links");
           window.scrollTo({ top: 0, behavior: "smooth" });
         } else if (href === "/") {
           e.preventDefault();
@@ -169,13 +159,11 @@ export default function App() {
     };
   }, []);
 
-  const navigateTo = (route: "home" | "admin" | "smart-links" | "view-smart-link" | "single-track-distribute", smartLinkId?: string) => {
+  const navigateTo = (route: "home" | "admin" | "view-smart-link" | "single-track-distribute", smartLinkId?: string) => {
     setCurrentRoute(route);
     let newPath = "/";
     if (route === "admin") {
       newPath = "/admin";
-    } else if (route === "smart-links") {
-      newPath = "/smart-links";
     } else if (route === "single-track-distribute") {
       newPath = "/distribute-single";
     } else if (route === "view-smart-link" && smartLinkId) {
@@ -192,21 +180,6 @@ export default function App() {
 
   if (currentRoute === "view-smart-link" && activeSmartLinkId) {
     return <SmartLinkViewer id={activeSmartLinkId} onBackToMain={() => navigateTo("home")} />;
-  }
-
-  if (currentRoute === "smart-links") {
-    return (
-      <div className="min-h-screen bg-[#0B0B0F] text-white flex flex-col relative font-sans">
-        <Navbar />
-        <main className="flex-grow">
-          <SmartLinkCreator 
-            onBackToMain={() => navigateTo("home")} 
-            onOpenViewer={(id) => navigateTo("view-smart-link", id)} 
-          />
-        </main>
-        <Footer />
-      </div>
-    );
   }
 
   if (currentRoute === "single-track-distribute") {

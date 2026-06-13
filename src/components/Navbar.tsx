@@ -26,12 +26,16 @@ export default function Navbar() {
   }, []);
 
   const navLinks = [
-    { name: "About", href: "#about", hash: "about", icon: Disc },
-    { name: "Distribution & Pricing", href: "#pricing", hash: "pricing", icon: Music },
-    { name: "Smart Links", href: "/smart-links", hash: "", icon: Globe },
+    { name: "About", href: "#about", hash: "about", icon: Disc, external: false },
+    { name: "Distribution & Pricing", href: "#pricing", hash: "pricing", icon: Music, external: false },
+    { name: "Smart Links", href: "https://home.wavora.live", hash: "", icon: Globe, external: true },
   ];
 
   const handleLinkClick = (e: React.MouseEvent<HTMLAnchorElement>, link: typeof navLinks[0]) => {
+    if (link.external) {
+      // Let it open naturally in a new tab
+      return;
+    }
     if (link.hash) {
       const path = window.location.pathname;
       if (path !== "/") {
@@ -69,6 +73,8 @@ export default function Navbar() {
                 key={link.name}
                 href={link.href}
                 onClick={(e) => handleLinkClick(e, link)}
+                target={link.external ? "_blank" : undefined}
+                rel={link.external ? "noopener noreferrer" : undefined}
                 className="text-gray-400 hover:text-white text-sm font-medium transition-colors relative py-1 group flex items-center gap-1.5"
               >
                 {link.name}
@@ -122,8 +128,13 @@ export default function Navbar() {
                 <a
                   key={link.name}
                   href={link.href}
+                  target={link.external ? "_blank" : undefined}
+                  rel={link.external ? "noopener noreferrer" : undefined}
                   onClick={(e) => {
                     setIsOpen(false);
+                    if (link.external) {
+                      return;
+                    }
                     if (link.hash) {
                       const path = window.location.pathname;
                       if (path !== "/") {
