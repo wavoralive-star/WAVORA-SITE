@@ -6,7 +6,7 @@
 import { useState, useEffect } from "react";
 import { Copy, Check, ExternalLink, Music, ArrowLeft, Headphones, Radio, Share2 } from "lucide-react";
 import { motion } from "motion/react";
-import { incrementSmartLinkVisits, getSmartLinks, SmartLink } from "../lib/smartlinks";
+import { incrementSmartLinkVisitsInSupabase, getSmartLinks, SmartLink } from "../lib/smartlinks";
 
 interface SmartLinkViewerProps {
   id: string;
@@ -21,21 +21,41 @@ export default function SmartLinkViewer({ id, onBackToMain }: SmartLinkViewerPro
   // Load state and increment visitor count
   useEffect(() => {
     setLoading(true);
-    // Slight pause for premium entrance feel
-    const timer = setTimeout(() => {
-      const activeTrack = incrementSmartLinkVisits(id);
-      if (activeTrack) {
-        setTrack(activeTrack);
-      } else {
-        // Fallback or previewing not-yet-saved state
-        const all = getSmartLinks();
-        const found = all.find(l => l.id === id);
-        if (found) setTrack(found);
-      }
-      setLoading(false);
-    }, 450);
+    let active = true;
 
-    return () => clearTimeout(timer);
+    const loadTrackData = async () => {
+      // Slight pause for premium entrance feel
+      await new Promise(resolve => setTimeout(resolve, 450));
+      if (!active) return;
+
+      try {
+        const activeTrack = await incrementSmartLinkVisitsInSupabase(id);
+        if (activeTrack && active) {
+          setTrack(activeTrack);
+        } else if (active) {
+          const all = getSmartLinks();
+          const found = all.find(l => l.id === id);
+          if (found) setTrack(found);
+        }
+      } catch (err) {
+        console.warn("Error running track increment:", err);
+        if (active) {
+          const all = getSmartLinks();
+          const found = all.find(l => l.id === id);
+          if (found) setTrack(found);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadTrackData();
+
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   const handleCopyLink = () => {

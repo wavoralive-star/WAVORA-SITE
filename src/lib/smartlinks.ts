@@ -54,6 +54,8 @@ const DEFAULT_LINKS: SmartLink[] = [
   }
 ];
 
+import { supabase } from "./supabase";
+
 export function getSmartLinks(): SmartLink[] {
   const stored = localStorage.getItem("wavora_smart_links");
   if (!stored) {
@@ -72,6 +74,66 @@ export function saveSmartLinks(links: SmartLink[]) {
   window.dispatchEvent(new Event("wavora_smart_links_updated"));
 }
 
+// Convert DB row (snake_case) from Supabase to client SmartLink (camelCase)
+export function mapDbRowToSmartLink(row: any): SmartLink {
+  return {
+    id: row.id,
+    title: row.title,
+    artist: row.artist,
+    artworkUrl: row.artwork_url || PRESET_ARTWORKS[0],
+    description: row.description || "",
+    spotifyUrl: row.spotify_url || "",
+    appleMusicUrl: row.apple_music_url || "",
+    jioSaavnUrl: row.jio_saavn_url || "",
+    youtubeUrl: row.youtube_url || "",
+    visits: Number(row.visits || 0),
+    createdAt: row.created_at || new Date().toISOString()
+  };
+}
+
+// Convert SmartLink back to DB row format for inserting
+export function mapSmartLinkToDbRow(link: SmartLink, userId?: string | null) {
+  return {
+    id: link.id,
+    user_id: userId || null,
+    title: link.title,
+    artist: link.artist,
+    artwork_url: link.artworkUrl,
+    description: link.description || null,
+    spotify_url: link.spotifyUrl || null,
+    apple_music_url: link.appleMusicUrl || null,
+    jio_saavn_url: link.jioSaavnUrl || null,
+    youtube_url: link.youtubeUrl || null,
+    visits: link.visits,
+    created_at: link.createdAt
+  };
+}
+
+// Fetch all dynamic links from Supabase and sync with localStorage
+export async function getSmartLinksFromSupabase(): Promise<SmartLink[]> {
+  try {
+    const { data, error } = await supabase
+      .from("smart_links")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.warn("Error reading from Supabase smart_links, loading fallback client links:", error);
+      return getSmartLinks();
+    }
+
+    if (data) {
+      const mapped = data.map(mapDbRowToSmartLink);
+      localStorage.setItem("wavora_smart_links", JSON.stringify(mapped));
+      window.dispatchEvent(new Event("wavora_smart_links_updated"));
+      return mapped;
+    }
+  } catch (err) {
+    console.warn("Exception in getSmartLinksFromSupabase:", err);
+  }
+  return getSmartLinks();
+}
+
 export function incrementSmartLinkVisits(id: string): SmartLink | null {
   const links = getSmartLinks();
   const index = links.findIndex(l => l.id === id);
@@ -80,6 +142,53 @@ export function incrementSmartLinkVisits(id: string): SmartLink | null {
   links[index].visits += 1;
   saveSmartLinks(links);
   return links[index];
+}
+
+// Async remote increment of visit logs in Supabase
+export async function incrementSmartLinkVisitsInSupabase(id: string): Promise<SmartLink | null> {
+  // Always trigger quick optimistic response locally
+  const localResult = incrementSmartLinkVisits(id);
+
+  try {
+    // 1. Fetch current status of smart link
+    const { data: current, error: getError } = await supabase
+      .from("smart_links")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (getError || !current) {
+      console.warn("Could not find smart link to increment on Supabase. Falling back to local values.", getError);
+      return localResult;
+    }
+
+    // 2. Increment remote database counter
+    const nextVisits = Number(current.visits || 0) + 1;
+    const { data: updated, error: updateError } = await supabase
+      .from("smart_links")
+      .update({ visits: nextVisits })
+      .eq("id", id)
+      .select()
+      .maybeSingle();
+
+    if (updateError || !updated) {
+      console.warn("Supabase visits update failed:", updateError);
+      return localResult;
+    }
+
+    const mapped = mapDbRowToSmartLink(updated);
+    // Sync local storage item with fresh remote value
+    const localLinks = getSmartLinks();
+    const idx = localLinks.findIndex(l => l.id === id);
+    if (idx !== -1) {
+      localLinks[idx] = mapped;
+      saveSmartLinks(localLinks);
+    }
+    return mapped;
+  } catch (e) {
+    console.warn("Exception during visits scale calculation:", e);
+    return localResult;
+  }
 }
 
 export function createSmartLink(link: Omit<SmartLink, "visits" | "createdAt">): { success: boolean; error?: string } {
@@ -108,8 +217,85 @@ export function createSmartLink(link: Omit<SmartLink, "visits" | "createdAt">): 
   return { success: true };
 }
 
+// Async insert of Smart Links to Supabase database
+export async function createSmartLinkInSupabase(
+  link: Omit<SmartLink, "visits" | "createdAt">
+): Promise<{ success: boolean; error?: string }> {
+  const slug = link.id.toLowerCase().trim();
+  const slugRegex = /^[a-z0-9-_]+$/i;
+  
+  if (!slugRegex.test(slug)) {
+    return { success: false, error: "Link identifier must contain only letters, numbers, hyphens, and underscores." };
+  }
+
+  try {
+    // 1. Verify availability on Supabase first
+    const { data: existing, error: checkError } = await supabase
+      .from("smart_links")
+      .select("id")
+      .eq("id", slug)
+      .maybeSingle();
+
+    if (checkError) {
+      console.warn("Supabase slug verification error:", checkError);
+    }
+
+    if (existing) {
+      return { success: false, error: "This URL handle is already taken. Try a different one!" };
+    }
+
+    // 2. Fetch current verified session context
+    let userId: string | null = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) userId = user.id;
+    } catch (_) {}
+
+    // 3. Setup core payload
+    const newLink: SmartLink = {
+      ...link,
+      id: slug,
+      visits: 0,
+      createdAt: new Date().toISOString()
+    };
+
+    const dbRow = mapSmartLinkToDbRow(newLink, userId);
+    
+    // 4. Save to remote table
+    const { error: insertError } = await supabase.from("smart_links").insert([dbRow]);
+
+    if (insertError) {
+      console.warn("Supabase insert error. Saving to local database fallback.", insertError);
+      return createSmartLink(link);
+    }
+
+    // 5. Save local state inline to match immediately
+    const localLinks = getSmartLinks();
+    localLinks.unshift(newLink);
+    saveSmartLinks(localLinks);
+
+    return { success: true };
+  } catch (err) {
+    console.warn("Exception raised during Supabase campaign setup:", err);
+    return createSmartLink(link);
+  }
+}
+
 export function deleteSmartLink(id: string) {
   const links = getSmartLinks();
   const filtered = links.filter(l => l.id !== id);
   saveSmartLinks(filtered);
+}
+
+// Async remote deletion of campaign on Supabase
+export async function deleteSmartLinkFromSupabase(id: string) {
+  deleteSmartLink(id);
+  try {
+    const { error } = await supabase.from("smart_links").delete().eq("id", id);
+    if (error) {
+      console.warn("Failed to delete record on database tier:", error);
+    }
+  } catch (err) {
+    console.warn("Exception during remote delete task execution:", err);
+  }
 }

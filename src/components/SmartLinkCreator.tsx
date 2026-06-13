@@ -10,7 +10,14 @@ import {
   HelpCircle, CheckCircle, Flame, BarChart3, ChevronRight 
 } from "lucide-react";
 import { motion } from "motion/react";
-import { getSmartLinks, createSmartLink, deleteSmartLink, PRESET_ARTWORKS, SmartLink } from "../lib/smartlinks";
+import { 
+  getSmartLinks, 
+  PRESET_ARTWORKS, 
+  SmartLink, 
+  getSmartLinksFromSupabase, 
+  createSmartLinkInSupabase, 
+  deleteSmartLinkFromSupabase 
+} from "../lib/smartlinks";
 
 interface SmartLinkCreatorProps {
   onBackToMain?: () => void;
@@ -39,7 +46,13 @@ export default function SmartLinkCreator({ onBackToMain, onOpenViewer }: SmartLi
 
   // Load previous lists
   useEffect(() => {
+    // Initial lightning-fast local cache render
     setLinks(getSmartLinks());
+    
+    // Remote fetch in background to sync globally
+    getSmartLinksFromSupabase().then(latest => {
+      setLinks(latest);
+    });
     
     const handleUpdated = () => {
       setLinks(getSmartLinks());
@@ -134,11 +147,11 @@ export default function SmartLinkCreator({ onBackToMain, onOpenViewer }: SmartLi
   };
 
   // Submission
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
-    const result = createSmartLink({
+    const result = await createSmartLinkInSupabase({
       id: formData.id.toLowerCase().trim(),
       title: formData.title.trim(),
       artist: formData.artist.trim(),
@@ -164,6 +177,10 @@ export default function SmartLinkCreator({ onBackToMain, onOpenViewer }: SmartLi
         youtubeUrl: ""
       });
       setErrors({});
+      // Instantly load fresh records from database state
+      getSmartLinksFromSupabase().then(latest => {
+        setLinks(latest);
+      });
       // Clear message
       setTimeout(() => setSuccessMsg(""), 4000);
     } else {
@@ -172,19 +189,23 @@ export default function SmartLinkCreator({ onBackToMain, onOpenViewer }: SmartLi
   };
 
   const handleCopyLink = (item: SmartLink) => {
-    // Generate actual URL matching the router system structure
-    const protocol = window.location.protocol;
-    const host = window.location.host;
-    const fullUrl = `${protocol}//${host}/s/${item.id}`;
+    // Detect preview or sandbox dev domain to allow local testing
+    const isSandbox = window.location.host.includes(".run.app") || window.location.host.includes("localhost");
+    const fullUrl = isSandbox 
+      ? `${window.location.protocol}//${window.location.host}/s/${item.id}`
+      : `https://home.wavora.live/s/${item.id}`;
     
     navigator.clipboard.writeText(fullUrl);
     setCopiedId(item.id);
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm("Are you sure you want to delete this smart link campaign? This action is irreversible.")) {
-      deleteSmartLink(id);
+      await deleteSmartLinkFromSupabase(id);
+      getSmartLinksFromSupabase().then(latest => {
+        setLinks(latest);
+      });
     }
   };
 
@@ -241,7 +262,7 @@ export default function SmartLinkCreator({ onBackToMain, onOpenViewer }: SmartLi
                 </label>
                 <div className="flex items-center">
                   <div className="bg-[#050507] border border-white/10 border-r-0 rounded-l-xl px-3 py-2.5 text-xs text-neutral-500 font-mono select-none">
-                    wavora.live/s/
+                    home.wavora.live/s/
                   </div>
                   <input
                     type="text"
@@ -591,7 +612,7 @@ export default function SmartLinkCreator({ onBackToMain, onOpenViewer }: SmartLi
                     <div className="space-y-1">
                       <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest font-mono block">Absolute Launch Address</span>
                       <div className="flex items-center p-1.5 bg-black/40 rounded border border-white/5 text-[9px] font-mono text-gray-400 select-all truncate">
-                        <span>wavora.live/s/{item.id}</span>
+                        <span>home.wavora.live/s/{item.id}</span>
                       </div>
                     </div>
                   </div>
