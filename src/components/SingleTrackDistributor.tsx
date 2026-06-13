@@ -11,6 +11,7 @@ import {
   Database, Info, RefreshCw, Layers, Sliders, Play
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { supabase } from "../lib/supabase";
 
 interface SingleTrackDistributorProps {
   selectedPlanId: "basic" | "pro" | "elite";
@@ -233,8 +234,45 @@ export default function SingleTrackDistributor({ selectedPlanId, onBackToMain }:
     }
   };
 
-  const executeSandboxBypass = () => {
+  const executeSandboxBypass = async () => {
     setIsSubmittingPayment(true);
+    
+    let userIdValue = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        userIdValue = user.id;
+      }
+    } catch (e) {
+      console.warn("Failed to retrieve user context for track logging:", e);
+    }
+
+    const dbPayload = {
+      user_id: userIdValue,
+      title: formData.title,
+      artist: formData.artist,
+      featured_artists: formData.featuredArtists || null,
+      genre: formData.genre,
+      release_date: formData.releaseDate,
+      label_name: formData.labelName || null,
+      is_dolby_atmos: formData.isDolbyAtmos,
+      has_content_id: formData.hasContentId,
+      lyrics: formData.lyrics || null,
+      plan: planId,
+      price: currentPlan.price,
+      status: "Live & Transmitting"
+    };
+
+    // Attempt direct save to Supabase
+    try {
+      const { error: dbErr } = await supabase.from("single_track_releases").insert([dbPayload]);
+      if (dbErr) {
+        console.warn("Supabase single track release bypass (Ensure schema exists in DB):", dbErr);
+      }
+    } catch (err) {
+      console.warn("Offline bypass activated:", err);
+    }
+
     setTimeout(() => {
       setIsSubmittingPayment(false);
       setCurrentStep("success");
