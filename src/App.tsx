@@ -16,14 +16,31 @@ import SmartLinkViewer from "./components/SmartLinkViewer";
 import SingleTrackDistributor from "./components/SingleTrackDistributor";
 import { syncOffersFromSupabase } from "./lib/pricing";
 
+// Helper to extract and clean smart link ID from pathname or hash
+const getCleanedSmartLinkId = (pathStr: string, hashStr: string): string => {
+  let raw = "";
+  if (pathStr.startsWith("/s/")) {
+    raw = pathStr.substring(3);
+  } else if (hashStr.startsWith("#/s/")) {
+    raw = hashStr.substring(4);
+  } else if (hashStr.startsWith("#s/")) {
+    raw = hashStr.substring(3);
+  }
+  
+  if (!raw) return "";
+  
+  // Clean: discard query params & extra hashes, strip trailing slashes, and lowercase
+  const withoutQuery = raw.split("?")[0].split("#")[0];
+  return withoutQuery.replace(/\/+$/, "").trim().toLowerCase();
+};
+
 export default function App() {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState("pro");
   const [isAnnualPlan, setIsAnnualPlan] = useState(true);
-  const [activeSmartLinkId, setActiveSmartLinkId] = useState<string>("");
   const [selectedSingleTrackPlan, setSelectedSingleTrackPlan] = useState<"basic" | "pro" | "elite">("pro");
 
-  // Client-side Router State
+  // Client-side Router State (Instant synchronous resolution on initial mount)
   const [currentRoute, setCurrentRoute] = useState<"home" | "admin" | "smart-links" | "view-smart-link" | "single-track-distribute">(() => {
     const path = window.location.pathname;
     const hash = window.location.hash;
@@ -37,13 +54,14 @@ export default function App() {
     if (path === "/distribute-single" || hash === "#distribute-single") {
       return "single-track-distribute";
     }
-    if (path.startsWith("/s/")) {
-      return "view-smart-link";
-    }
-    if (hash.startsWith("#/s/") || hash.startsWith("#s/")) {
+    if (path.startsWith("/s/") || hash.startsWith("#/s/") || hash.startsWith("#s/")) {
       return "view-smart-link";
     }
     return "home";
+  });
+
+  const [activeSmartLinkId, setActiveSmartLinkId] = useState<string>(() => {
+    return getCleanedSmartLinkId(window.location.pathname, window.location.hash);
   });
 
   // Sync promotional pricing offers from Supabase database globally on launch
@@ -51,20 +69,7 @@ export default function App() {
     syncOffersFromSupabase();
   }, []);
 
-  // Load the initial smart link ID if applicable
-  useEffect(() => {
-    const path = window.location.pathname;
-    const hash = window.location.hash;
-    if (path.startsWith("/s/")) {
-      setActiveSmartLinkId(path.substring(3));
-    } else if (hash.startsWith("#/s/")) {
-      setActiveSmartLinkId(hash.substring(4));
-    } else if (hash.startsWith("#s/")) {
-      setActiveSmartLinkId(hash.substring(3));
-    }
-  }, []);
-
-  // Keep path and state in sync during popstate/hashchange
+  // Sync state transitions on window popstate/hashchange
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname;
@@ -74,9 +79,7 @@ export default function App() {
       } else if (path === "/smart-links" || path.startsWith("/smart-links") || hash === "#smart-links" || hash === "#/smart-links") {
         setCurrentRoute("smart-links");
       } else if (path.startsWith("/s/") || hash.startsWith("#/s/") || hash.startsWith("#s/")) {
-        const id = path.startsWith("/s/") 
-          ? path.substring(3) 
-          : (hash.startsWith("#/s/") ? hash.substring(4) : hash.substring(3));
+        const id = getCleanedSmartLinkId(path, hash);
         setActiveSmartLinkId(id);
         setCurrentRoute("view-smart-link");
       } else {

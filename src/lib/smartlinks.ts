@@ -136,7 +136,7 @@ export async function getSmartLinksFromSupabase(): Promise<SmartLink[]> {
 
 export function incrementSmartLinkVisits(id: string): SmartLink | null {
   const links = getSmartLinks();
-  const index = links.findIndex(l => l.id === id);
+  const index = links.findIndex(l => l.id.toLowerCase() === id.toLowerCase().trim());
   if (index === -1) return null;
   
   links[index].visits += 1;
@@ -146,15 +146,16 @@ export function incrementSmartLinkVisits(id: string): SmartLink | null {
 
 // Async remote increment of visit logs in Supabase
 export async function incrementSmartLinkVisitsInSupabase(id: string): Promise<SmartLink | null> {
+  const slug = id.toLowerCase().trim();
   // Always trigger quick optimistic response locally
-  const localResult = incrementSmartLinkVisits(id);
+  const localResult = incrementSmartLinkVisits(slug);
 
   try {
     // 1. Fetch current status of smart link
     const { data: current, error: getError } = await supabase
       .from("smart_links")
       .select("*")
-      .eq("id", id)
+      .eq("id", slug)
       .maybeSingle();
 
     if (getError || !current) {
@@ -167,7 +168,7 @@ export async function incrementSmartLinkVisitsInSupabase(id: string): Promise<Sm
     const { data: updated, error: updateError } = await supabase
       .from("smart_links")
       .update({ visits: nextVisits })
-      .eq("id", id)
+      .eq("id", slug)
       .select()
       .maybeSingle();
 
@@ -179,7 +180,7 @@ export async function incrementSmartLinkVisitsInSupabase(id: string): Promise<Sm
     const mapped = mapDbRowToSmartLink(updated);
     // Sync local storage item with fresh remote value
     const localLinks = getSmartLinks();
-    const idx = localLinks.findIndex(l => l.id === id);
+    const idx = localLinks.findIndex(l => l.id.toLowerCase() === slug);
     if (idx !== -1) {
       localLinks[idx] = mapped;
       saveSmartLinks(localLinks);
