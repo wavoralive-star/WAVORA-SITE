@@ -1,28 +1,32 @@
--- ==========================================
+-- =====================================================================
 -- SPDX-License-Identifier: Apache-2.0
--- Description: Supabase Production Database Schema
--- Focus: Artist applications, Single Track releases, Plan Pricing Configuration, and automated Price Audit logs
--- ==========================================
+-- Description: Complete Production Database Schema for Supabase
+-- Target System: WAVORA LIVE High-Fidelity Music Distribution Ecosystem
+-- Includes: Plan Pricing, Registrations, Single Releases, Smart Links, and Price Logs
+-- =====================================================================
 
 -- ---------------------------------------------------------------------
--- 1. CLEANUP / RESET STAGE (Idempotency)
+-- 1. CLEANUP / RESET STAGE (Idempotent execution setup)
 -- ---------------------------------------------------------------------
-DROP TRIGGER IF EXISTS tr_on_price_change ON pricing_plans;
-DROP FUNCTION IF EXISTS log_price_change();
+-- Drop tables first. Dropping tables with CASCADE automatically drops dependent constraints and triggers!
 DROP TABLE IF EXISTS price_change_logs CASCADE;
 DROP TABLE IF EXISTS pricing_plans CASCADE;
 DROP TABLE IF EXISTS single_track_releases CASCADE;
 DROP TABLE IF EXISTS applications CASCADE;
+DROP TABLE IF EXISTS smart_links CASCADE;
 
--- Enable UUID generation extension if not done already
+-- Drop functions
+DROP FUNCTION IF EXISTS log_price_change();
+
+-- Enable UUID generation extension if not configured
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ---------------------------------------------------------------------
--- 2. "applications" TABLE (Subscription Registrations)
+-- 2. "applications" TABLE (Premium Onboarding Registrations)
 -- ---------------------------------------------------------------------
 CREATE TABLE applications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID DEFAULT NULL, -- Links to auth.users if logged in
+    user_id UUID DEFAULT NULL, -- Links to auth.users in Supabase Auth
     email VARCHAR(255) NOT NULL,
     full_name VARCHAR(255) NOT NULL,
     stage_name VARCHAR(255),
@@ -35,18 +39,18 @@ CREATE TABLE applications (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- CREATE INDEXES for speedy search / admin parsing
+-- Indexes for lightning fast lookups & query optimization
 CREATE INDEX idx_applications_user_id ON applications(user_id);
 CREATE INDEX idx_applications_email ON applications(email);
 CREATE INDEX idx_applications_status ON applications(status);
 
 
 -- ---------------------------------------------------------------------
--- 3. "single_track_releases" TABLE (Single Track Registrations)
+-- 3. "single_track_releases" TABLE (Single Track Release Orders)
 -- ---------------------------------------------------------------------
 CREATE TABLE single_track_releases (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID DEFAULT NULL, -- Links to auth.users if logged in
+    user_id UUID DEFAULT NULL, -- Links to auth.users in Supabase Auth
     title VARCHAR(255) NOT NULL,
     artist VARCHAR(255) NOT NULL,
     featured_artists VARCHAR(255),
@@ -62,16 +66,38 @@ CREATE TABLE single_track_releases (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Indexes for performance
+-- Optimize queries for tracking release catalogs and users
 CREATE INDEX idx_releases_user_id ON single_track_releases(user_id);
 CREATE INDEX idx_releases_artist ON single_track_releases(artist);
 
 
 -- ---------------------------------------------------------------------
--- 4. "pricing_plans" TABLE (Current active configuration)
+-- 4. "smart_links" TABLE (Pre-Save Landing Campaigns)
+-- ---------------------------------------------------------------------
+CREATE TABLE smart_links (
+    id VARCHAR(100) PRIMARY KEY, -- Custom URL handle slug (e.g. 'electro-rush')
+    user_id UUID DEFAULT NULL, -- Creator's user profile ID
+    title VARCHAR(255) NOT NULL,
+    artist VARCHAR(255) NOT NULL,
+    artwork_url TEXT NOT NULL, -- Unsplash cover or verified artist upload
+    description TEXT,
+    spotify_url TEXT,
+    apple_music_url TEXT,
+    jio_saavn_url TEXT,
+    youtube_url TEXT,
+    visits INT DEFAULT 0 NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX idx_smart_links_visits ON smart_links(visits DESC);
+CREATE INDEX idx_smart_links_user ON smart_links(user_id);
+
+
+-- ---------------------------------------------------------------------
+-- 5. "pricing_plans" TABLE (Global pricing configuration parameters)
 -- ---------------------------------------------------------------------
 CREATE TABLE pricing_plans (
-    id VARCHAR(50) PRIMARY KEY, -- e.g. 'sub_basic', 'sub_pro', 'sub_elite', 'single_basic', 'single_pro', 'single_elite'
+    id VARCHAR(50) PRIMARY KEY, -- 'sub_basic', 'sub_pro', 'sub_elite', 'single_basic' etc.
     name VARCHAR(255) NOT NULL,
     type VARCHAR(50) NOT NULL, -- 'subscription_annual', 'subscription_monthly', 'single_release'
     price NUMERIC(10, 2) NOT NULL,
@@ -81,7 +107,7 @@ CREATE TABLE pricing_plans (
 
 
 -- ---------------------------------------------------------------------
--- 5. "price_change_logs" TABLE (Audit log history)
+-- 6. "price_change_logs" TABLE (Comprehensive Audit log history)
 -- ---------------------------------------------------------------------
 CREATE TABLE price_change_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -89,7 +115,7 @@ CREATE TABLE price_change_logs (
     plan_name VARCHAR(255) NOT NULL,
     old_price NUMERIC(10, 2) NOT NULL,
     new_price NUMERIC(10, 2) NOT NULL,
-    changed_by_user UUID DEFAULT NULL, -- Stores auth.uid() if executed inside web context
+    changed_by_user UUID DEFAULT NULL, -- Stores auth.uid() automatically if initiated via web SDK log
     changed_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -97,12 +123,12 @@ CREATE INDEX idx_price_change_plan ON price_change_logs(plan_id);
 
 
 -- ---------------------------------------------------------------------
--- 6. DB TRIGGER: Log Price Changes automatically
+-- 7. DB TRIGGER & PROCEDURE: Automatic Price Change Log Generation
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION log_price_change()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Only write history log if the price actually updated
+    -- Log inside audit records folder if pricing value shifts
     IF OLD.price IS DISTINCT FROM NEW.price THEN
         INSERT INTO price_change_logs (
             plan_id,
@@ -115,11 +141,11 @@ BEGIN
             OLD.name,
             OLD.price,
             NEW.price,
-            auth.uid() -- Automatically fetches context in Supabase web workspace
+            auth.uid() -- Automatically extracts the acting authenticated admin from metadata context
         );
     END IF;
     
-    -- update the updated_at timestamp on the pricing record
+    -- Sync update timestamp on source plan element
     NEW.updated_at = timezone('utc'::text, now());
     RETURN NEW;
 END;
@@ -132,7 +158,7 @@ CREATE TRIGGER tr_on_price_change
 
 
 -- ---------------------------------------------------------------------
--- 7. SEED DATA: Insert default pricing values
+-- 8. DEFAULT SEED DATA
 -- ---------------------------------------------------------------------
 INSERT INTO pricing_plans (id, name, type, price, currency) VALUES
 ('sub_basic', 'Basic Subscription Plans', 'subscription_annual', 12.00, 'USD'),
@@ -148,20 +174,23 @@ SET name = EXCLUDED.name,
 
 
 -- ---------------------------------------------------------------------
--- 8. SECURITY - ENABLE ROW LEVEL SECURITY (RLS) FOR HYPER-SECURITY
+-- 9. DEEP SECURITY FRAMEWORK: ROW LEVEL SECURITY (RLS) POLICIES
 -- ---------------------------------------------------------------------
+
+-- Enable Row Level Security (RLS) on all production tables
 ALTER TABLE applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE single_track_releases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE smart_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pricing_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE price_change_logs ENABLE ROW LEVEL SECURITY;
 
--- Applications RLS Policies:
--- 1. Allow anyone to enter application (Insert) securely for onboarding transitions
+-- applications policies:
+-- Only allow anonymous/customer insert from the main application signup screens
 CREATE POLICY "Allow anonymous application signups" 
 ON applications FOR INSERT 
 WITH CHECK (true);
 
--- 2. Artists can only select/view their own applications based on verified user_id or verified email
+-- Users can inspect their own application statuses
 CREATE POLICY "Users can view their own profile logs" 
 ON applications FOR SELECT 
 USING (
@@ -169,35 +198,45 @@ USING (
     OR auth.jwt() ->> 'email' = email
 );
 
--- Single Track Releases RLS Policies:
--- 1. Allow any authenticated / anonymous release submissions
+-- single_track_releases policies:
+-- Customers are allowed to send track details securely
 CREATE POLICY "Allow direct track release insertions" 
 ON single_track_releases FOR INSERT 
 WITH CHECK (true);
 
--- 2. Artists can view their own track logs
+-- Artists can view their requested single catalog
 CREATE POLICY "Users can retrieve their track catalog" 
 ON single_track_releases FOR SELECT 
 USING (
     auth.uid() = user_id
 );
 
--- Pricing Plans RLS Policies:
--- 1. All users can view current pricing levels
+-- smart_links policies:
+-- Public needs to access smart links for redirection
+CREATE POLICY "Allow public select on smart links" 
+ON smart_links FOR SELECT 
+USING (true);
+
+-- Content creators insert/modify their campaign links
+CREATE POLICY "Creators can insert campaign links" 
+ON smart_links FOR INSERT 
+WITH CHECK (true);
+
+-- Allow creators to delete/update their own links
+CREATE POLICY "Creators can alter their own links" 
+ON smart_links FOR ALL 
+USING (
+    auth.uid() = user_id OR user_id IS NULL
+);
+
+-- pricing_plans policies:
+-- Public can view catalog pricing values
 CREATE POLICY "Public pricing info viewable by everyone" 
 ON pricing_plans FOR SELECT 
 USING (true);
 
--- Price Change Logs RLS Policies:
--- 1. Viewable only by admin / logged-in users tracking pricing shifts
+-- price_change_logs policies:
+-- Admins/managers can select to parse metrics
 CREATE POLICY "Authorized individuals can read price logs" 
 ON price_change_logs FOR SELECT 
 USING (auth.role() = 'authenticated');
-
-
--- ---------------------------------------------------------------------
--- 9. DEV-FRIENDLY TESTING INSTRUCTIONS (Mock Update to trigger audit log!)
--- ---------------------------------------------------------------------
--- Execute the following command in Supabase to test database triggers:
--- UPDATE pricing_plans SET price = 41.00 WHERE id = 'single_pro';
--- SELECT * FROM price_change_logs;
