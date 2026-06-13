@@ -15,14 +15,15 @@ export default function Footer() {
   };
 
   const handleSecretAdminTrigger = () => {
-    setClickCount(prev => {
-      const next = prev + 1;
-      if (next >= 5) {
+    const nextCount = clickCount + 1;
+    if (nextCount >= 5) {
+      setClickCount(0);
+      setTimeout(() => {
         window.dispatchEvent(new CustomEvent("open-admin-portal-secret"));
-        return 0;
-      }
-      return next;
-    });
+      }, 0);
+    } else {
+      setClickCount(nextCount);
+    }
   };
 
   const footerLinks = [
