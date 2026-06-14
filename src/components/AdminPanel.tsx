@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import Logo from "./Logo";
 import { getStoredOffers, saveStoredOffers, getPlanPriceDetails, BASE_PRICES } from "../lib/pricing";
+import { supabase } from "../lib/supabase";
 
 // Pre-seeded applications if none exist in localStorage
 const MOCK_SEED_APPLICATIONS = [
@@ -69,6 +70,21 @@ const MOCK_SEED_APPLICATIONS = [
   }
 ];
 
+const mapDbApplicationToClient = (row: any) => ({
+  id: row.id,
+  plan: row.plan,
+  isAnnual: row.is_annual,
+  email: row.email,
+  fullName: row.full_name,
+  stageName: row.stage_name || "",
+  contactNumber: row.contact_number || "",
+  referral: row.referral || "",
+  receipt: row.receipt || "",
+  status: row.status || "pending",
+  userId: row.user_id,
+  date: row.created_at || new Date().toISOString()
+});
+
 interface AdminPanelProps {
   onBackToMain: () => void;
 }
@@ -97,8 +113,28 @@ export default function AdminPanel({ onBackToMain }: AdminPanelProps) {
   const [sortBy, setSortBy] = useState("date"); // or "name"
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  // Load and refresh entries from localStorage
-  const loadApplications = () => {
+  // Load and refresh entries from Supabase + fallback localStorage
+  const loadApplications = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("applications")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        throw error;
+      }
+
+      if (data && data.length > 0) {
+        const mapped = data.map(mapDbApplicationToClient);
+        setApplications(mapped);
+        localStorage.setItem("wavora_applications", JSON.stringify(mapped));
+        return;
+      }
+    } catch (err) {
+      console.warn("Could not load from Supabase applications, falling back to local storage:", err);
+    }
+
     let stored = localStorage.getItem("wavora_applications");
     if (!stored) {
       // Seed initial mock data
@@ -164,7 +200,7 @@ export default function AdminPanel({ onBackToMain }: AdminPanelProps) {
   };
 
   // Change Application status
-  const updateStatus = (appId: string, status: "pending" | "approved" | "rejected") => {
+  const updateStatus = async (appId: string, status: "pending" | "approved" | "rejected") => {
     const updated = applications.map(app => {
       if (app.id === appId) {
         return { ...app, status };
@@ -173,16 +209,46 @@ export default function AdminPanel({ onBackToMain }: AdminPanelProps) {
     });
     setApplications(updated);
     localStorage.setItem("wavora_applications", JSON.stringify(updated));
+
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(appId);
+    if (!isUUID) return;
+
+    try {
+      const { error } = await supabase
+        .from("applications")
+        .update({ status })
+        .eq("id", appId);
+      if (error) {
+        console.warn("Could not sync updated status with Supabase:", error);
+      }
+    } catch (err) {
+      console.warn("Exception during remote status update:", err);
+    }
   };
 
   // Delete Application
-  const deleteApp = (appId: string) => {
+  const deleteApp = async (appId: string) => {
     if (confirm("Are you sure you want to permanently delete this application record?")) {
       const updated = applications.filter(app => app.id !== appId);
       setApplications(updated);
       localStorage.setItem("wavora_applications", JSON.stringify(updated));
       if (selectedApp && selectedApp.id === appId) {
         setSelectedApp(updated[0] || null);
+      }
+
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(appId);
+      if (!isUUID) return;
+
+      try {
+        const { error } = await supabase
+          .from("applications")
+          .delete()
+          .eq("id", appId);
+        if (error) {
+          console.warn("Could not remove record from Supabase:", error);
+        }
+      } catch (err) {
+        console.warn("Exception during remote deletion:", err);
       }
     }
   };
@@ -214,7 +280,7 @@ export default function AdminPanel({ onBackToMain }: AdminPanelProps) {
   };
 
   // Add a quick random synthetic application to test inflow
-  const handleAddDemoSubmission = () => {
+  const handleAddDemoSubmission = async () => {
     const demoNames = [
       { full: "Rishabh Malhotra", stage: "RISH MIX", email: "rish@studio.in" },
       { full: "Kavya Iyer", stage: "Iyer Beats", email: "kavya.music@yahoo.com" },
@@ -228,8 +294,11 @@ export default function AdminPanel({ onBackToMain }: AdminPanelProps) {
     const referrals = ["Instagram", "Google Search", "YouTube Showcase", "Word of Mouth"];
     const referral = referrals[Math.floor(Math.random() * referrals.length)];
 
+    // Generate a valid UUID if possible, or fallback
+    const newAppId = crypto.randomUUID ? crypto.randomUUID() : `app-${Date.now()}`;
+
     const newApp = {
-      id: `app-${Date.now()}`,
+      id: newAppId,
       plan,
       isAnnual,
       email: item.email,
@@ -246,6 +315,27 @@ export default function AdminPanel({ onBackToMain }: AdminPanelProps) {
     setApplications(updated);
     localStorage.setItem("wavora_applications", JSON.stringify(updated));
     setSelectedApp(newApp);
+
+    try {
+      const { error } = await supabase.from("applications").insert([{
+        id: newAppId,
+        plan: newApp.plan,
+        is_annual: newApp.isAnnual,
+        email: newApp.email,
+        full_name: newApp.fullName,
+        stage_name: newApp.stageName,
+        contact_number: newApp.contactNumber,
+        referral: newApp.referral,
+        receipt: newApp.receipt,
+        status: newApp.status,
+        user_id: null
+      }]);
+      if (error) {
+        console.warn("Could not insert demo submission into Supabase:", error);
+      }
+    } catch (err) {
+      console.warn("Exception seeding demo application into Supabase:", err);
+    }
   };
 
   // Calculate pricing values
@@ -477,6 +567,14 @@ export default function AdminPanel({ onBackToMain }: AdminPanelProps) {
         <div className="flex items-center gap-4">
           {/* Quick utility buttons */}
           <div className="hidden sm:flex items-center gap-2">
+            <button
+              onClick={() => loadApplications()}
+              title="Pull latest applications from remote database"
+              className="px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 rounded-lg text-[10px] font-bold uppercase tracking-wider text-emerald-300 transition-all cursor-pointer flex items-center gap-1.5"
+            >
+              <RefreshCw className="h-3 w-3" />
+              Sync DB
+            </button>
             <button
               onClick={handleAddDemoSubmission}
               title="Spawn a realistic demo application submission"

@@ -206,18 +206,14 @@ ALTER TABLE price_change_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE plan_offers ENABLE ROW LEVEL SECURITY;
 
 -- applications policies:
--- Only allow anonymous/customer insert from the main application signup screens
-CREATE POLICY "Allow anonymous application signups" 
-ON applications FOR INSERT 
-WITH CHECK (true);
+-- Allow anyone to fetch, insert, update and delete applications for seamless administrative sync
+DROP POLICY IF EXISTS "Allow anonymous application signups" ON applications;
+DROP POLICY IF EXISTS "Users can view their own profile logs" ON applications;
 
--- Users can inspect their own application statuses
-CREATE POLICY "Users can view their own profile logs" 
-ON applications FOR SELECT 
-USING (
-    auth.uid() = user_id 
-    OR auth.jwt() ->> 'email' = email
-);
+CREATE POLICY "Allow public all-around operations on applications" 
+ON applications FOR ALL
+USING (true)
+WITH CHECK (true);
 
 -- single_track_releases policies:
 -- Customers are allowed to send track details securely

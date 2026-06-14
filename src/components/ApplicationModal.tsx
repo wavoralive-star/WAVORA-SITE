@@ -300,7 +300,44 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
     if (file.type.match("image.*")) {
       const reader = new FileReader();
       reader.onload = () => {
-        setReceiptPreview(reader.result as string);
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const MAX_WIDTH = 800;
+          const MAX_HEIGHT = 800;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            try {
+              // 0.75 quality Jpeg offers outstanding visual fidelity while compressing the payload from 5MB to ~50KB-100KB
+              const compressedBase64 = canvas.toDataURL("image/jpeg", 0.75);
+              setReceiptPreview(compressedBase64);
+            } catch (err) {
+              console.warn("Base64 canvas render failed, falling back to raw data:", err);
+              setReceiptPreview(reader.result as string);
+            }
+          } else {
+            setReceiptPreview(reader.result as string);
+          }
+        };
+        img.src = reader.result as string;
       };
       reader.readAsDataURL(file);
     } else {
@@ -317,8 +354,6 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
       newErrors.email = "Email address is required.";
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
       newErrors.email = "Please enter a valid email address.";
-    } else if (!sessionUser || sessionUser.email !== formData.email) {
-      newErrors.email = "Email address must be verified using Supabase before proceeding.";
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -337,6 +372,12 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
       setErrors(prev => ({ ...prev, receipt: "Payment receipt verification screenshot is required!" }));
       return;
     }
+    // Reset former submission errors
+    setErrors(prev => {
+      const next = { ...prev };
+      delete next.submit;
+      return next;
+    });
     setIsVerifying(true);
     // Simulate premium verification transaction server cycle
     setTimeout(async () => {
@@ -354,13 +395,39 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
       };
 
       // Try asynchronously syncing directly to Supabase if applications database table is set up
+      let remoteAppId: string | null = null;
       try {
-        const { error: dbErr } = await supabase.from("applications").insert([dbPayload]);
+        console.log("Saving application payload to Supabase:", dbPayload);
+        const { data: inserted, error: dbErr } = await supabase
+          .from("applications")
+          .insert([dbPayload])
+          .select();
+
         if (dbErr) {
-          console.warn("Supabase database sync bypassed (Setup schema if you wish database storage):", dbErr);
+          console.error("⛔ Supabase Insert Error details:", {
+            message: dbErr.message,
+            details: dbErr.details,
+            hint: dbErr.hint,
+            code: dbErr.code,
+          });
+          setErrors(prev => ({
+            ...prev,
+            submit: `Supabase database error: ${dbErr.message} (Code: ${dbErr.code}). ${dbErr.hint || "Please make sure your database applications table is created, is formatted properly, and that policies permit inserting records."}`
+          }));
+          setIsVerifying(false);
+          return;
+        } else if (inserted && inserted.length > 0) {
+          remoteAppId = inserted[0].id;
+          console.log("✅ Successfully saved application to Supabase, ID:", remoteAppId);
         }
-      } catch (err) {
-        console.warn("Autosaved to cache. Supabase database server silent:", err);
+      } catch (err: any) {
+        console.error("Autosave sync caught system exception:", err);
+        setErrors(prev => ({
+          ...prev,
+          submit: `Local network block or Supabase connection offline: ${err?.message || "Unknown connectivity issue."}`
+        }));
+        setIsVerifying(false);
+        return;
       }
 
       // Save application to localStorage with session context
@@ -369,7 +436,7 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
         const existingApps = existingAppsRaw ? JSON.parse(existingAppsRaw) : [];
         
         const newApp = {
-          id: `app-${Date.now()}`,
+          id: remoteAppId || `app-${Date.now()}`,
           plan: formData.plan,
           isAnnual: isAnnual,
           email: formData.email,
@@ -661,15 +728,6 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
                         <label htmlFor="email" className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider block">
                           Email Address
                         </label>
-                        {sessionUser && sessionUser.email === formData.email ? (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            <ShieldCheck className="h-3 w-3" /> VERIFIED
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded bg-red-400/10 text-red-400 border border-red-400/20">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> VERIFICATION REQUIRED
-                          </span>
-                        )}
                       </div>
 
                       <div className="relative group">
@@ -682,11 +740,10 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
                           type="email"
                           value={formData.email}
                           onChange={handleInputChange}
-                          disabled={!!sessionUser && sessionUser.email === formData.email}
-                          placeholder="artist@supabase.io"
+                          placeholder="artist@wavoralive.com"
                           className={`w-full bg-[#050507]/60 border rounded-xl pl-9 pr-4 py-3 text-xs text-white placeholder-neutral-500 outline-none transition-all duration-300 focus:border-purple-500 focus:bg-[#0B0B0F]/90 ${
                             errors.email ? "border-red-500/50 focus:border-red-500" : "border-white/10"
-                          } ${sessionUser && sessionUser.email === formData.email ? "opacity-60 cursor-not-allowed bg-white/[0.01]" : ""}`}
+                          }`}
                         />
                       </div>
 
@@ -695,221 +752,6 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
                           <AlertCircle className="w-3 h-3" /> {errors.email}
                         </span>
                       )}
-
-                      {/* Interactive Supabase Verification controller */}
-                      <div className="mt-3.5 pt-3.5 border-t border-white/5 space-y-3 relative z-10 font-sans">
-                        {sessionUser && sessionUser.email === formData.email ? (
-                          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left">
-                            <div className="space-y-0.5">
-                              <span className="text-[9px] uppercase tracking-wider font-extrabold text-emerald-400 block font-mono">
-                                Security Status Verified
-                              </span>
-                              <p className="text-[11px] text-gray-400 font-medium">
-                                Secure release draft authenticated under <span className="font-mono text-purple-300 font-bold">{sessionUser.email}</span>.
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={handleSignOut}
-                              disabled={isVerifyingEmail}
-                              className="text-[9px] font-bold uppercase tracking-wider bg-white/5 hover:bg-red-500/10 text-gray-400 hover:text-red-400 border border-white/5 focus:outline-none transition-all px-3 py-2 rounded-lg cursor-pointer shrink-0"
-                            >
-                              {isVerifyingEmail ? "Disconnecting..." : "Change Email"}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="space-y-3">
-                            {!verificationSent ? (
-                              <div className="space-y-2.5">
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-black/40 p-3 rounded-xl border border-white/5">
-                                  <p className="text-[10px] sm:text-xs text-gray-400 leading-relaxed max-w-sm">
-                                    To secure your artist revenue agreement and draft releases, we verify every email address with single-use security passes.
-                                  </p>
-                                  <button
-                                    type="button"
-                                    onClick={sendVerificationLink}
-                                    disabled={isVerifyingEmail || !formData.email || !/\S+@\S+\.\S+/.test(formData.email)}
-                                    className="px-4 py-2 bg-gradient-purple-cyan hover:opacity-90 disabled:opacity-30 disabled:pointer-events-none transition-all rounded-xl text-black font-extrabold text-[10px] uppercase tracking-wider cursor-pointer shadow-lg shrink-0"
-                                  >
-                                    {isVerifyingEmail ? "Sending Pass..." : "Verify This Email"}
-                                  </button>
-                                </div>
-                                <div className="text-right">
-                                  <button
-                                    type="button"
-                                    onClick={handleSandboxBypass}
-                                    className="text-[9px] font-extrabold text-transparent bg-clip-text bg-gradient-purple-cyan hover:opacity-85 transition-all uppercase tracking-widest cursor-pointer inline-flex items-center gap-1 focus:outline-none"
-                                  >
-                                    ⚡ Click here to verify instantly (Sandbox Sandbox Bypass / Test Mode)
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="space-y-3.5 bg-[#07070B] p-4 sm:p-5 rounded-2xl border border-purple-500/15 relative overflow-hidden">
-                                <div className="absolute top-0 right-0 w-20 h-20 bg-purple-500/10 blur-2xl rounded-full" />
-                                
-                                <div className="space-y-1 text-left">
-                                  <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
-                                    <Clock className="h-3.5 w-3.5 text-purple-400 animate-pulse" />
-                                    Confirm Email Link Sent
-                                  </span>
-                                  <p className="text-[11px] text-gray-400 leading-relaxed">
-                                    A confirmation email was sent to <strong className="text-white font-mono">{sentToEmail}</strong> containing your secure verification link.
-                                  </p>
-                                </div>
-
-                                {/* Step-by-Step Interactive Guide */}
-                                <div className="bg-black/40 p-4 rounded-xl border border-white/5 space-y-3 text-left">
-                                  <div className="flex items-start gap-3">
-                                    <div className="w-5 h-5 rounded-full bg-purple-500/10 border border-purple-500/30 flex items-center justify-center shrink-0 mt-0.5">
-                                      <span className="text-[10px] font-bold text-purple-400 font-mono">1</span>
-                                    </div>
-                                    <div className="space-y-0.5">
-                                      <h5 className="text-[11px] font-extrabold text-white uppercase tracking-wider">Click "Confirm email address"</h5>
-                                      <p className="text-[10px] text-gray-400 leading-relaxed">
-                                        Open the confirmation email in your inbox and click the button to authorize your artist session safely.
-                                      </p>
-                                    </div>
-                                  </div>
-
-                                  <div className="flex items-start gap-3 pt-1 border-t border-white/5">
-                                    <div className="w-5 h-5 rounded-full bg-purple-500/10 border border-purple-500/30 flex items-center justify-center shrink-0 mt-0.5">
-                                      <span className="text-[10px] font-bold text-purple-400 font-mono">2</span>
-                                    </div>
-                                    <div className="space-y-2 flex-1">
-                                      <div className="space-y-0.5">
-                                        <h5 className="text-[11px] font-extrabold text-white uppercase tracking-wider">Authorize & Sync Session</h5>
-                                        <p className="text-[10px] text-gray-400 leading-relaxed">
-                                          Once you've clicked the link, press the button below to sync your session and instantly unlock the secure payment step.
-                                        </p>
-                                      </div>
-
-                                      <button
-                                        type="button"
-                                        onClick={checkVerificationStatus}
-                                        disabled={isVerifyingEmail}
-                                        className="w-full sm:w-auto px-4 py-2.5 bg-gradient-purple-cyan hover:opacity-95 disabled:opacity-30 disabled:pointer-events-none transition-all rounded-xl text-black font-extrabold text-[10px] uppercase tracking-wider cursor-pointer shadow-lg flex items-center justify-center gap-1.5"
-                                      >
-                                        {isVerifyingEmail ? (
-                                          <>
-                                            <span className="w-3 h-3 rounded-full border-2 border-black border-t-transparent animate-spin inline-block" />
-                                            Checking Status...
-                                          </>
-                                        ) : (
-                                          <>
-                                            <Check className="h-3.5 w-3.5" />
-                                            Check Verification Link Clicked
-                                          </>
-                                        )}
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* Alternative manual 6-digit OTP passcode section */}
-                                <div className="border-t border-white/5 pt-3.5 text-left">
-                                  <details className="group/otp-details">
-                                    <summary className="list-none flex items-center justify-between text-[10px] font-bold text-gray-500 hover:text-gray-400 cursor-pointer select-none transition-colors">
-                                      <span>Alternative: Enter Verification Code manually</span>
-                                      <span className="text-[8px] transform group-open/otp-details:rotate-180 transition-transform">▼</span>
-                                    </summary>
-                                    
-                                    <div className="pt-3 space-y-2.5">
-                                      <p className="text-[10px] text-gray-500 leading-relaxed">
-                                        If your email contains a 6-digit security code or code parameter, paste it below.
-                                      </p>
-                                      
-                                      <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5">
-                                        <div className="flex-1 space-y-1">
-                                          <label htmlFor="otpToken" className="text-[8px] font-extrabold text-gray-500 uppercase tracking-widest font-mono">
-                                            6-Digit Passcode
-                                          </label>
-                                          <div className="relative">
-                                            <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
-                                            <input
-                                              id="otpToken"
-                                              type="text"
-                                              maxLength={6}
-                                              placeholder="123456"
-                                              value={otpToken}
-                                              onChange={(e) => setOtpToken(e.target.value.replace(/\D/g, ''))}
-                                              className="w-full bg-[#050507] border border-white/15 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-gray-600 outline-none focus:border-purple-500 font-mono tracking-[4px]"
-                                            />
-                                          </div>
-                                        </div>
-
-                                        <button
-                                          type="button"
-                                          onClick={() => verifyOtpCode()}
-                                          disabled={isVerifyingEmail || otpToken.length !== 6}
-                                          className="px-4 py-2 bg-white hover:bg-neutral-100 disabled:opacity-30 disabled:pointer-events-none transition-all rounded-xl text-black font-extrabold text-[10px] uppercase tracking-widest cursor-pointer shadow-lg h-9 flex items-center justify-center shrink-0"
-                                        >
-                                          {isVerifyingEmail ? "Verifying..." : "Verify Code"}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </details>
-                                </div>
-
-                                <div className="flex items-center justify-between text-[9px] text-gray-500 border-t border-white/5 pt-2.5">
-                                  <span>Didn't receive email? Check spam.</span>
-                                  <div className="flex items-center gap-3">
-                                    <button
-                                      type="button"
-                                      onClick={handleSandboxBypass}
-                                      className="text-[9px] text-purple-400 hover:text-purple-300 font-extrabold uppercase transition-all tracking-wider cursor-pointer"
-                                    >
-                                      ⚡ Sandbox Bypass
-                                    </button>
-                                    <span className="text-white/10">|</span>
-                                    <button
-                                      type="button"
-                                      onClick={sendVerificationLink}
-                                      disabled={isVerifyingEmail}
-                                      className="text-purple-400 hover:text-purple-300 font-bold transition-all uppercase cursor-pointer bg-transparent border-0"
-                                    >
-                                      {isVerifyingEmail ? "Sending..." : "Resend Link"}
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Status notifications specifically for verification */}
-                            {verificationError && (
-                              <div className="space-y-2">
-                                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-[10px] sm:text-xs flex flex-col gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />
-                                    <span>{verificationError}</span>
-                                  </div>
-                                  {verificationError.toLowerCase().includes("rate limit") && (
-                                    <div className="mt-1 pt-2 border-t border-white/5 flex flex-col gap-2 text-left">
-                                      <p className="text-[10px] text-gray-400 leading-normal font-sans">
-                                        No worries! If you are blocked by Supabase's safe email limit (or testing iteratively), activate sandbox-simulation bypass below to keep working.
-                                      </p>
-                                      <button
-                                        type="button"
-                                        onClick={handleSandboxBypass}
-                                        className="self-start px-3 py-1.5 bg-gradient-purple-cyan text-black hover:opacity-90 rounded-lg text-[9px] font-black uppercase tracking-widest cursor-pointer transition-all active:scale-95 border-0 focus:outline-none"
-                                      >
-                                        Bypass Rate Limit & Verify Instantly
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-
-                            {verificationSuccess && (
-                              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-[10px] sm:text-xs flex items-center gap-2">
-                                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                                <span>{verificationSuccess}</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -976,21 +818,10 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
                     <div className="pt-4">
                       <button
                         type="submit"
-                        disabled={!sessionUser || sessionUser.email !== formData.email}
-                        className={`w-full py-4 rounded-xl font-extrabold text-xs uppercase tracking-widest shadow-xl transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
-                          sessionUser && sessionUser.email === formData.email
-                            ? "bg-gradient-purple-cyan text-white hover:opacity-95"
-                            : "bg-[#0E0E14] text-neutral-600 border border-white/5 cursor-not-allowed"
-                        }`}
+                        className="w-full py-4 rounded-xl font-extrabold text-xs uppercase tracking-widest shadow-xl transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer bg-gradient-purple-cyan text-white hover:opacity-95"
                       >
-                        {sessionUser && sessionUser.email === formData.email ? (
-                          <>
-                            Proceed to Payment
-                            <ArrowRight className="h-4 w-4" />
-                          </>
-                        ) : (
-                          "Please Verify Your Email to Unlock Payment"
-                        )}
+                        Proceed to Payment
+                        <ArrowRight className="h-4 w-4" />
                       </button>
                     </div>
                   </motion.form>
@@ -1145,6 +976,55 @@ export default function ApplicationModal({ isOpen, onClose, initialPlanId = "pro
                         </span>
                       )}
                     </div>
+
+                    {errors.submit && (
+                      <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-450 rounded-xl text-left space-y-3.5">
+                        <div className="flex items-start gap-2.5">
+                          <ShieldAlert className="h-4.5 w-4.5 shrink-0 text-red-400 mt-0.5" />
+                          <div className="space-y-1">
+                            <h6 className="font-extrabold uppercase text-[10px] tracking-wider text-red-300">Supabase Table Sync Blocked</h6>
+                            <p className="text-[11px] leading-relaxed text-gray-300">{errors.submit}</p>
+                          </div>
+                        </div>
+                        <div className="pt-2 border-t border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-[10px]">
+                          <span className="text-gray-450">Ensure you have run the database setup scripts with RLS policies in Supabase.</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setErrors(prev => {
+                                const next = { ...prev };
+                                delete next.submit;
+                                return next;
+                              });
+                              const mockAppId = `local-fallback-${Date.now()}`;
+                              const existingAppsRaw = localStorage.getItem("wavora_applications");
+                              const existingApps = existingAppsRaw ? JSON.parse(existingAppsRaw) : [];
+                              const newApp = {
+                                id: mockAppId,
+                                plan: formData.plan,
+                                isAnnual: isAnnual,
+                                email: formData.email,
+                                fullName: formData.fullName,
+                                stageName: formData.stageName,
+                                contactNumber: formData.contactNumber,
+                                referral: formData.referral,
+                                receipt: receiptPreview || "",
+                                status: "pending",
+                                userId: sessionUser?.id || null,
+                                date: new Date().toISOString()
+                              };
+                              localStorage.setItem("wavora_applications", JSON.stringify([newApp, ...existingApps]));
+                              window.dispatchEvent(new Event("storage"));
+                              setIsVerifying(false);
+                              setCurrentStep(3);
+                            }}
+                            className="px-3 py-1.5 bg-white/10 hover:bg-white/15 hover:text-white text-gray-200 font-extrabold rounded-lg uppercase text-[9px] tracking-wider cursor-pointer self-start sm:self-auto transition-all transition-colors"
+                          >
+                            ⚠️ Force Local Sandbox Backup
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Navigation Buttons for Step 2 */}
                     <div className="pt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
